@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Share2, Download, Trash2, Car, PartyPopper } from 'lucide-react'
 import { useStore } from '../../store'
-import { Field, useToast } from '../../components/ui'
+import { Field, useToast, confirmDialog } from '../../components/ui'
 import { DriverCard } from '../../components/PlaceEditor'
 import { shareLink } from '../../lib/extras'
 import { copyText, download } from '../../lib/util'
@@ -89,7 +89,7 @@ export default function MoreTab({ trip }) {
         )}
       </div>
 
-      <button className="btn btn-danger mt" onClick={() => { if (window.confirm(`确定删除「${trip.name}」？删除后无法恢复（建议先导出备份）。`)) { deleteTrip(trip.id); nav('/', { replace: true }) } }}>
+      <button className="btn btn-danger mt" onClick={async () => { if (await confirmDialog({ title: `删除「${trip.name}」？`, message: '删除后无法恢复（建议先导出备份）。', okText: '删除', danger: true })) { nav('/', { replace: true }); deleteTrip(trip.id); toast('已删除') } }}>
         <Trash2 size={16} />删除这次旅行
       </button>
       {driver && <DriverCard text={driver.localAddress || driver.name} sub={driver.localAddress ? driver.name : driver.city.en} onClose={() => setDriver(null)} />}

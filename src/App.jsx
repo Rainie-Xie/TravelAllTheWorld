@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { HashRouter, Routes, Route, NavLink, Outlet, useLocation } from 'react-router-dom'
 import { Plane, Globe2, Settings as Cog } from 'lucide-react'
 import { useStore } from './store'
-import { ToastProvider } from './components/ui'
+import { ToastProvider, ConfirmHost } from './components/ui'
 import Home from './pages/Home'
 import TripEditor from './pages/TripEditor'
 import TripDetail from './pages/TripDetail'
@@ -33,7 +33,9 @@ function ScrollTop() {
 function useHydrated() {
   const [h, setH] = useState(useStore.persist.hasHydrated())
   useEffect(() => {
-    const unsub = useStore.persist.onFinishHydration(() => setH(true))
+    // after loading, write a fresh copy to both stores (migrates 1.0 data, repairs a stale copy)
+    const unsub = useStore.persist.onFinishHydration(() => { setH(true); useStore.setState({}) })
+    if (useStore.persist.hasHydrated()) useStore.setState({})
     setH(useStore.persist.hasHydrated())
     return unsub
   }, [])
@@ -45,6 +47,7 @@ export default function App() {
   if (!hydrated) return <div className="splash"><div style={{ fontSize: 48 }}>🧳</div><div className="bold">途记</div></div>
   return (
     <ToastProvider>
+      <ConfirmHost />
       <HashRouter>
         <ScrollTop />
         <div className="app">

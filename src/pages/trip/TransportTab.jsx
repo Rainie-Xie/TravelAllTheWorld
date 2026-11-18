@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Plus, CalendarPlus, AlarmClock, Loader2, Search, RefreshCw } from 'lucide-react'
 import { useStore } from '../../store'
-import { Sheet, Field, Empty, useToast } from '../../components/ui'
+import { Sheet, Field, Empty, useToast, confirmDialog } from '../../components/ui'
 import { searchAirports, COMMON_TZ, AIRPORTS } from '../../data/airports'
 import { searchPlaces, travelMinutes, haversine } from '../../lib/geo'
 import { TRANSPORT_TYPES, sortedTransports, leaveInfo, nearestCity, departureHotel, getCity } from '../../lib/trip'
@@ -80,6 +80,7 @@ function StopInput({ label, value, onChange, near }) {
 
 function TransportEditor({ trip, value, onSave, onDelete, onClose }) {
   const [t, setT] = useState(value)
+  const [more, setMore] = useState(false)
   const set = (p) => setT((x) => ({ ...x, ...p }))
   const setStop = (key, v) => {
     const patch = { [key]: v }
@@ -100,7 +101,7 @@ function TransportEditor({ trip, value, onSave, onDelete, onClose }) {
   return (
     <Sheet open onClose={onClose} title={value.id ? '编辑交通' : '添加交通'}
       footer={<>
-        {value.id && <button className="btn btn-danger" onClick={() => window.confirm('删除这段交通？') && onDelete(t)}>删除</button>}
+        {value.id && <button className="btn btn-danger" onClick={async () => (await confirmDialog({ title: '删除这段交通？', okText: '删除', danger: true })) && onDelete(t)}>删除</button>}
         <button className="btn btn-primary grow" onClick={() => onSave(t)} disabled={!t.dep}>保存</button>
       </>}>
       <div className="stack">
@@ -120,6 +121,11 @@ function TransportEditor({ trip, value, onSave, onDelete, onClose }) {
         <Field label="到达时间（当地时间）" hint={dur != null ? `飞行/行驶约 ${fmtDur(dur)}（已按时区换算）` : null}>
           <input className="input" type="datetime-local" value={t.arr || ''} min={t.dep} onChange={(e) => set({ arr: e.target.value })} />
         </Field>
+        <div className="tiny muted">
+          城市：{trip.cities.find((c) => c.id === t.fromCityId)?.name || '行程外'} → {trip.cities.find((c) => c.id === t.toCityId)?.name || '行程外'}（按机场/车站位置自动识别，不对可在「更多」里改）
+        </div>
+        <button className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start', paddingLeft: 0 }} onClick={() => setMore((v) => !v)}>{more ? '收起 ▲' : '更多：城市、航站楼、行李、订单号… ▼'}</button>
+        {more && (<>
         <div className="grid-2">
           <Field label="从哪个城市出发">
             <select className="select sm" value={t.fromCityId || ''} onChange={(e) => set({ fromCityId: e.target.value || null })}>
@@ -159,6 +165,7 @@ function TransportEditor({ trip, value, onSave, onDelete, onClose }) {
             <input className="input sm" type="number" inputMode="numeric" value={t.transferMin ?? ''} onChange={(e) => set({ transferMin: e.target.value === '' ? null : +e.target.value, transferAuto: false })} />
           </Field>
         </div>
+        </>)}
       </div>
     </Sheet>
   )
@@ -224,7 +231,9 @@ export default function TransportTab({ trip }) {
 
   const blank = () => {
     const last = list[list.length - 1]
-    return { type: 'flight', number: '', from: last?.to || null, to: null, dep: '', arr: '', fromCityId: last?.toCityId || null, toCityId: null, intl: false }
+    // continue from the previous leg only if it ends inside the trip (not the flight home)
+    const cont = last?.toCityId ? last : null
+    return { type: 'flight', number: '', from: cont?.to || null, to: null, dep: '', arr: '', fromCityId: cont?.toCityId || null, toCityId: null, intl: false }
   }
 
   return (

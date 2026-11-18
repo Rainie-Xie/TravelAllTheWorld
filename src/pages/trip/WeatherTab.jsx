@@ -41,7 +41,7 @@ function CityWeather({ city, days }) {
           </div>
           {rec && (
             <div className="mt-s">
-              <div className="row mb-s" style={{ gap: 6 }}>
+              <div className="row wrap mb-s" style={{ gap: 6 }}>
                 <span className="chip yellow">👗 {fmtShort(day.date)} 穿衣：{rec.summary}</span>
                 {day.uv != null && <span className="chip">☀️ 紫外线 {Math.round(day.uv)}</span>}
                 {day.hum != null && <span className="chip">💦 湿度 {Math.round(day.hum)}%</span>}

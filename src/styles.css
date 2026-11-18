@@ -330,3 +330,42 @@ img { max-width: 100%; }
 .spin { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .soft-tiles { filter: saturate(0.72) brightness(1.04) contrast(0.96) hue-rotate(-6deg); }
+
+/* ============ iOS fixes ============ */
+/* Safari gives date/time inputs an intrinsic min-width → they overflow grid cells */
+input[type='date'], input[type='time'], input[type='datetime-local'] {
+  -webkit-appearance: none;
+  appearance: none;
+  min-width: 0;
+  max-width: 100%;
+  display: block;
+  text-align: left;
+  line-height: normal;
+}
+input::-webkit-date-and-time-value { text-align: left; margin: 0; }
+input[type='date'].input, input[type='time'].input, input[type='datetime-local'].input { padding-top: 0; padding-bottom: 0; display: flex; align-items: center; }
+.grid-2 > *, .field, .stack > *, .row > .grow { min-width: 0; }
+select.select { -webkit-appearance: none; appearance: none; padding-right: 30px; background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238a9585' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 10px center; text-overflow: ellipsis; }
+.row-between.wrap { flex-wrap: wrap; row-gap: 8px; }
+.stepper .icon-btn { width: 34px; height: 34px; }
+
+/* in-app confirm dialog */
+.confirm-box {
+  position: fixed; z-index: 3501; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: calc(100% - 48px); max-width: 360px; background: var(--surface); border-radius: 20px;
+  padding: 20px; box-shadow: var(--shadow-l); animation: fade .15s ease;
+}
+.btn-danger-solid { background: var(--red-500); border-color: var(--red-500); color: #fff; }
+
+/* never let anything push the page sideways */
+html, body { overflow-x: hidden; }
+@supports (overflow: clip) { html, body { overflow-x: clip; } }
+html { scrollbar-gutter: stable; }
+
+/* the doodle used to stick out of the cover; tapping ⋯ then scrolled the cover sideways */
+.trip-card, .trip-cover { overflow: hidden; }
+@supports (overflow: clip) { .trip-card, .trip-cover, .card, .list, .map-wrap { overflow: clip; } .card { overflow: visible; } }
+.trip-cover .doodle { right: 6px; top: 6px; font-size: 76px; transform: rotate(8deg); }
+.trip-cover .tape { right: 64px; }
+.trip-cover h3 { padding-right: 40px; overflow-wrap: anywhere; }
+.toast { bottom: calc(var(--tabbar-h) + 92px + var(--safe-b)); }

@@ -20,6 +20,7 @@ export default function Footprint() {
   const trips = useStore((s) => s.trips)
   const footprint = useStore((s) => s.footprint)
   const toggleCountry = useStore((s) => s.toggleCountry)
+  const lightCountry = useStore((s) => s.lightCountry)
   const addFootCity = useStore((s) => s.addFootCity)
   const removeFootCity = useStore((s) => s.removeFootCity)
   const toast = useToast()
@@ -230,10 +231,12 @@ export default function Footprint() {
 
       <CountryPicker open={pickCountry} onClose={() => setPickCountry(false)} onPick={(c) => setTimeout(() => setCityCountry(c), 50)} />
       {cityCountry && (
-        <CityPicker open onClose={() => setCityCountry(null)} countryCode={cityCountry}
+        <CityPicker open multi onClose={() => setCityCountry(null)} countryCode={cityCountry}
+          picked={cities.filter((x) => x.countryCode === cityCountry).map((x) => x.name)}
           onPick={(c) => {
-            addFootCity({ id: uid(), name: c.name, lat: c.lat, lng: c.lng, countryCode: c.countryCode || cityCountry })
-            if (!visited.has(c.countryCode || cityCountry)) toggleCountry(c.countryCode || cityCountry)
+            const cc = c.countryCode || cityCountry
+            addFootCity({ id: uid(), name: c.name, lat: c.lat, lng: c.lng, countryCode: cc })
+            if (!tripCountries.has(cc)) lightCountry(cc)
             toast(`已点亮 ${c.name} ✨`)
           }} />
       )}

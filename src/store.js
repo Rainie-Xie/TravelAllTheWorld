@@ -1,26 +1,60 @@
 import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
-import { get as idbGet, set as idbSet, del as idbDel } from 'idb-keyval'
+import { createStore, getMany, setMany, delMany } from 'idb-keyval'
 import { produce } from './lib/util'
 
-// IndexedDB storage with localStorage fallback (private mode etc.)
+/*
+ * Belt-and-braces storage.
+ * iOS home-screen apps lose their IndexedDB connection after being backgrounded
+ * ("Connection to Indexed Database server lost"), so every save goes to BOTH
+ * localStorage (synchronous, survives the app being killed) and IndexedDB, each
+ * stamped with a time. On load the newer copy wins. A dead IndexedDB connection
+ * is reopened and retried once.
+ */
+let idbStore = null
+const getIdb = () => (idbStore ||= createStore('tripnote-db', 'kv'))
+async function idb(fn) {
+  try {
+    return await fn(getIdb())
+  } catch {
+    idbStore = null // reconnect and retry once
+    return await fn(getIdb())
+  }
+}
+const T = (name) => `${name}:savedAt`
+export const saveStatus = { lastSave: 0, lastError: '' }
+
 const storage = {
   async getItem(name) {
-    try {
-      const v = await idbGet(name)
-      if (v != null) return v
-    } catch { /* fall through */ }
-    try { return localStorage.getItem(name) } catch { return null }
+    let ls = null, lsT = 0, db = null, dbT = 0
+    try { ls = localStorage.getItem(name); lsT = +localStorage.getItem(T(name)) || 0 } catch { /* ignore */ }
+    try { [db, dbT] = await idb((s) => getMany([name, T(name)], s)); dbT = +dbT || 0 } catch { /* ignore */ }
+    if (db == null) {
+      // migrate from the 1.0 database (idb-keyval default store)
+      try {
+        const { get } = await import('idb-keyval')
+        const old = await get(name)
+        if (old != null && ls == null) return old
+      } catch { /* ignore */ }
+    }
+    if (ls != null && (db == null || lsT >= dbT)) return ls
+    return db ?? ls
   },
   async setItem(name, value) {
-    try { await idbSet(name, value); return } catch { /* fall through */ }
-    try { localStorage.setItem(name, value) } catch { /* ignore */ }
+    const now = Date.now()
+    let ok = false
+    try { localStorage.setItem(name, value); localStorage.setItem(T(name), String(now)); ok = true } catch (e) { saveStatus.lastError = `本地存储：${e.message}` }
+    try { await idb((s) => setMany([[name, value], [T(name), now]], s)); ok = true } catch (e) { saveStatus.lastError = `数据库：${e.message}` }
+    if (ok) saveStatus.lastSave = now
   },
   async removeItem(name) {
-    try { await idbDel(name) } catch { /* ignore */ }
-    try { localStorage.removeItem(name) } catch { /* ignore */ }
+    try { localStorage.removeItem(name); localStorage.removeItem(T(name)) } catch { /* ignore */ }
+    try { await idb((s) => delMany([name, T(name)], s)) } catch { /* ignore */ }
   },
 }
+
+// keep caches small: only the most recent N entries (by .at)
+const prune = (obj, n) => Object.fromEntries(Object.entries(obj).sort((a, b) => (b[1]?.at || 0) - (a[1]?.at || 0)).slice(0, n))
 
 export const DEFAULT_SETTINGS = {
   homeCurrency: 'CNY',
@@ -63,6 +97,8 @@ export const useStore = create(
             },
           }
         }),
+      lightCountry: (code) =>
+        set((s) => (s.footprint.countries.includes(code) ? {} : { footprint: { ...s.footprint, countries: [...s.footprint.countries, code] } })),
       addFootCity: (city) =>
         set((s) => ({ footprint: { ...s.footprint, cities: [...s.footprint.cities, city] } })),
       removeFootCity: (id) =>
@@ -71,9 +107,9 @@ export const useStore = create(
       saveTemplate: (tpl) => set((s) => ({ templates: [tpl, ...s.templates.filter((t) => t.id !== tpl.id)] })),
       deleteTemplate: (id) => set((s) => ({ templates: s.templates.filter((t) => t.id !== id) })),
 
-      setWeather: (key, data) => set((s) => ({ weather: { ...s.weather, [key]: data } })),
+      setWeather: (key, data) => set((s) => ({ weather: prune({ ...s.weather, [key]: data }, 24) })),
       setRates: (rates) => set({ rates }),
-      setRecs: (key, data) => set((s) => ({ recs: { ...s.recs, [key]: data } })),
+      setRecs: (key, data) => set((s) => ({ recs: prune({ ...s.recs, [key]: data }, 24) })),
 
       exportAll: () => {
         const { trips, footprint, settings, templates } = get()

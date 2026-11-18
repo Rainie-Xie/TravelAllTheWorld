@@ -42,7 +42,8 @@ export const hotelsOf = (city) => city.places.filter((p) => p.type === 'hotel')
 
 // the hotel you sleep in on the night of `date`
 export function hotelForNight(city, date) {
-  const hs = hotelsOf(city)
+  // when hotels overlap, the one added most recently wins
+  const hs = hotelsOf(city).slice().reverse()
   const exact = hs.find((h) => h.hotelIn && h.hotelOut && h.hotelIn <= date && date < h.hotelOut)
   if (exact) return exact
   if (date >= city.leave) return null
@@ -159,7 +160,9 @@ export function dayDefaults(trip, city, date, settings) {
       notes.push(deadlineLabel)
     }
   }
-  return { startMin, endMin, startRef, endRef, notes, departing, arriving }
+  // arriving by plane/train with a hotel booked → go to the hotel first to drop the bags
+  const dropBags = arriving && tonight && startRef !== `p:${tonight.id}` ? tonight : null
+  return { startMin, endMin, startRef, endRef, notes, departing, arriving, dropBags }
 }
 const fmt = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(Math.round(m % 60)).padStart(2, '0')}`
 
@@ -187,22 +190,31 @@ export function effectiveDay(trip, city, date, settings) {
     startRef: plan.startRef !== undefined ? plan.startRef : def.startRef,
     endRef: plan.endRef !== undefined ? plan.endRef : def.endRef,
     mode: plan.mode || settings.mode || 'walk',
+    dropBags: plan.dropBags === false ? null : def.dropBags,
   }
 }
 
 /* ---------- plan one day ---------- */
-export async function planDay(trip, city, date, settings, { optimize = true } = {}) {
+export async function planDay(trip, city, date, settings, { optimize = true, drop = true } = {}) {
   const eff = effectiveDay(trip, city, date, settings)
   const start = resolveRef(trip, city, eff.startRef)
   const end = resolveRef(trip, city, eff.endRef)
   let list = placesForDay(city, date)
+  const lockedIds = { ...(getDayPlan(city, date).locked || {}) }
+  const pseudo = {}
+  if (eff.dropBags && list.length) {
+    const h = eff.dropBags
+    const bags = { id: '__bags', name: h.name, lat: h.lat, lng: h.lng, type: 'hotel', stay: 20, priority: 'must', bags: true, hotelId: h.id }
+    pseudo.__bags = bags
+    list = [bags, ...list]
+    lockedIds.__bags = true
+  }
   const startPt = start || (list[0] ? { ...list[0], name: list[0].name } : null)
   if (!startPt) return { order: [], dropped: [], tl: null, warnings: [], eff }
 
   const allPts = [startPt, ...list, ...(end ? [end] : [])]
   const M = await getMatrix(allPts, eff.mode)
   const overhead = LEG_OVERHEAD[eff.mode]
-  const lockedIds = getDayPlan(city, date).locked || {}
 
   const build = (subset) => {
     // sub-matrix for subset of list (by index into list)
@@ -238,7 +250,7 @@ export async function planDay(trip, city, date, settings, { optimize = true } = 
   }
   result = run()
   const dropped = []
-  if (optimize) {
+  if (optimize && drop) {
     const deadline = eff.endMin
     // drop optional places (biggest time saving first) until we meet the deadline
     let guard = 0
@@ -273,6 +285,7 @@ export async function planDay(trip, city, date, settings, { optimize = true } = 
     start: startPt,
     end,
     source: M.source,
+    pseudo,
   }
 }
 

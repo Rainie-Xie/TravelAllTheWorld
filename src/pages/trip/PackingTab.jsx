@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Check, Sparkles, RotateCcw, Plus, MoreHorizontal, Save, Backpack } from 'lucide-react'
 import { useStore } from '../../store'
-import { Sheet, Field, Progress, Empty, useToast } from '../../components/ui'
+import { Sheet, Field, Progress, Empty, useToast, confirmDialog } from '../../components/ui'
 import { CATEGORIES, suggestPacking, mergePacking } from '../../lib/packing'
 import { useTripWeather } from '../../lib/useWeather'
 import { uid } from '../../lib/util'
@@ -64,8 +64,9 @@ export default function PackingTab({ trip }) {
     mut((d) => { d.packing.push({ id: uid(), key: `c-${uid()}`, name: newName.trim(), category: newCat, qty: 1, checked: false, source: 'custom', carryOn: false }) })
     setNewName('')
   }
-  const returnMode = () => {
-    if (!window.confirm('开启返程模式：清空所有勾选，回程收拾时再勾一遍，防止把东西落在酒店。继续吗？')) return
+  const returnMode = async () => {
+    const toReturn = trip.packingPhase !== 'return'
+    if (!(await confirmDialog(toReturn ? { title: '开启返程模式？', message: '会清空所有勾选，回程收拾时再勾一遍，防止把东西落在酒店。', okText: '开启' } : { title: '切回出发模式？', message: '会清空所有勾选。', okText: '切换' }))) return
     mut((d) => { d.packing.forEach((i) => { i.checked = false }); d.packingPhase = d.packingPhase === 'return' ? 'go' : 'return' })
   }
 
@@ -151,7 +152,7 @@ export default function PackingTab({ trip }) {
           <button className="btn btn-primary" type="submit" aria-label="添加"><Plus size={18} /></button>
         </form>
       </div>
-      <button className="btn btn-ghost btn-sm" onClick={() => window.confirm('清空整个清单？') && mut((d) => { d.packing = [] })}>清空清单重新生成</button>
+      <button className="btn btn-ghost btn-sm" onClick={async () => (await confirmDialog({ title: '清空整个清单？', message: '清空后可以重新智能生成。', okText: '清空', danger: true })) && mut((d) => { d.packing = [] })}>清空清单重新生成</button>
 
       {editing && (
         <ItemEditor item={editing} onClose={() => setEditing(null)}
@@ -170,7 +171,7 @@ function TemplatePicker({ templates, onPick, onClose }) {
         {templates.map((t) => (
           <div key={t.id} className="list-item click" onClick={() => onPick(t)}>
             <div className="grow"><div className="bold">{t.name}</div><div className="tiny faint">{t.items.length} 项</div></div>
-            <button className="btn btn-ghost btn-sm" onClick={(e) => { e.stopPropagation(); window.confirm('删除这个模板？') && del(t.id) }}>删除</button>
+            <button className="btn btn-ghost btn-sm" onClick={async (e) => { e.stopPropagation(); if (await confirmDialog({ title: '删除这个模板？', okText: '删除', danger: true })) del(t.id) }}>删除</button>
           </div>
         ))}
       </div>

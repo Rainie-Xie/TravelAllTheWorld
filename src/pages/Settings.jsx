@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Download, Upload, Smartphone } from 'lucide-react'
 import { useStore } from '../store'
-import { Field, Seg, useToast } from '../components/ui'
+import { Field, Seg, useToast, confirmDialog } from '../components/ui'
 import { CURRENCY_NAMES, ALL_COUNTRIES } from '../data/countries'
 import { MODES } from '../lib/trip'
 import { download, readFileText } from '../lib/util'
@@ -30,7 +30,7 @@ export default function Settings() {
     if (!f) return
     try {
       const data = JSON.parse(await readFileText(f))
-      const replace = trips.length > 0 && window.confirm('点「确定」用备份完全覆盖当前数据；点「取消」则合并（保留现有行程，添加备份中的行程）。')
+      const replace = trips.length > 0 && (await confirmDialog({ title: '怎么导入这个备份？', message: '「覆盖」：用备份替换现在的全部数据\n「合并」：保留现有行程，再加上备份里的', okText: '覆盖', cancelText: '合并', danger: true }))
       importAll(data, replace ? 'replace' : 'merge')
       toast(`已导入 ${data.trips?.length || 0} 个行程`)
     } catch (err) {
@@ -68,7 +68,7 @@ export default function Settings() {
             </select>
           </Field>
         </div>
-        <div className="row-between">
+        <div className="row-between wrap">
           <span className="label">默认出行方式</span>
           <Seg value={settings.mode} onChange={(v) => setSettings({ mode: v })} options={Object.entries(MODES).map(([k, v]) => ({ value: k, label: `${v.emoji} ${v.label}` }))} />
         </div>

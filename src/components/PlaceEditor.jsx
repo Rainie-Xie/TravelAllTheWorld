@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ExternalLink, Trash2, Car } from 'lucide-react'
-import { Sheet, Field, Seg } from './ui'
+import { Sheet, Field, Seg, confirmDialog } from './ui'
 import { PLACE_TYPES, cityDates } from '../lib/trip'
 import { fmtDate, fmtDur } from '../lib/time'
 import { gmPlaceUrl } from '../lib/geo'
@@ -21,7 +21,8 @@ export function DriverCard({ text, sub, onClose }) {
 export default function PlaceEditor({ open, place, city, onSave, onDelete, onClose }) {
   const [p, setP] = useState(place)
   const [driver, setDriver] = useState(false)
-  useEffect(() => { setP(place) }, [place])
+  const [more, setMore] = useState(false)
+  useEffect(() => { setP(place); setMore(!!(place?.open || place?.close || place?.ticket || place?.dayLocked)) }, [place])
   if (!p) return null
   const set = (patch) => setP((x) => ({ ...x, ...patch }))
   const dates = cityDates(city)
@@ -35,7 +36,7 @@ export default function PlaceEditor({ open, place, city, onSave, onDelete, onClo
         footer={
           <>
             {onDelete && place?.id && (
-              <button className="btn btn-danger" aria-label="删除地点" onClick={() => { if (window.confirm(`删除「${p.name}」？`)) onDelete(p) }}><Trash2 size={16} /></button>
+              <button className="btn btn-danger" aria-label="删除地点" onClick={async () => { if (await confirmDialog({ title: `删除「${p.name}」？`, okText: '删除', danger: true })) onDelete(p) }}><Trash2 size={16} /></button>
             )}
             <button className="btn btn-primary grow" onClick={() => onSave({ ...p, name: p.name.trim() || '未命名地点' })}>保存</button>
           </>
@@ -47,7 +48,7 @@ export default function PlaceEditor({ open, place, city, onSave, onDelete, onClo
           </Field>
           <div className="chip-scroll">
             {Object.entries(PLACE_TYPES).map(([k, v]) => (
-              <button key={k} className={`chip btnlike ${p.type === k ? 'on' : ''}`} onClick={() => set({ type: k })}>{v.emoji} {v.label}</button>
+              <button key={k} className={`chip btnlike ${p.type === k ? 'on' : ''}`} onClick={() => set(k === 'hotel' && !p.hotelIn ? { type: k, hotelIn: city.arrive, hotelOut: city.leave } : { type: k })}>{v.emoji} {v.label}</button>
             ))}
           </div>
 
@@ -70,7 +71,7 @@ export default function PlaceEditor({ open, place, city, onSave, onDelete, onClo
             </>
           ) : (
             <>
-              <div className="row-between">
+              <div className="row-between wrap">
                 <span className="label">优先级</span>
                 <Seg value={p.priority || 'must'} onChange={(v) => set({ priority: v })} options={[{ value: 'must', label: '⭐ 必去' }, { value: 'optional', label: '有空再去' }]} />
               </div>
@@ -87,6 +88,8 @@ export default function PlaceEditor({ open, place, city, onSave, onDelete, onClo
                   </select>
                 </Field>
               </div>
+              <button className="btn btn-ghost btn-sm" style={{ alignSelf: 'flex-start', paddingLeft: 0 }} onClick={() => setMore((v) => !v)}>{more ? '收起 ▲' : '更多：营业时间、门票… ▼'}</button>
+              {more && (<>
               <div className="grid-2">
                 <Field label="开门时间">
                   <input className="input sm" type="time" value={p.open || ''} onChange={(e) => set({ open: e.target.value })} />
@@ -102,6 +105,7 @@ export default function PlaceEditor({ open, place, city, onSave, onDelete, onClo
               <Field label="门票 / 费用">
                 <input className="input" value={p.ticket || ''} onChange={(e) => set({ ticket: e.target.value })} placeholder="例如 30,000 VND" />
               </Field>
+              </>)}
             </>
           )}
           <Field label="备注">

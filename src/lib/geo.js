@@ -45,6 +45,11 @@ export async function searchPlaces(q, near, countryCode) {
   }
   if (countryCode) params.countrycodes = countryCode.toLowerCase()
   let rows = await nominatim(params)
+  if (!rows.length) {
+    // fuzzier second engine (typos, partial hotel names, addresses)
+    const ph = await photon(q, near).catch(() => [])
+    if (ph.length) return ph
+  }
   if (!rows.length && countryCode) {
     delete params.countrycodes
     rows = await nominatim(params)
@@ -57,6 +62,28 @@ export async function searchPlaces(q, near, countryCode) {
     type: guessType(r),
     dist: near ? haversine(near, { lat: +r.lat, lng: +r.lon }) : null,
   }))
+}
+
+const PHOTON_TYPE = { hotel: 'hotel', hostel: 'hotel', guest_house: 'hotel', motel: 'hotel', apartment: 'hotel', restaurant: 'food', fast_food: 'food', cafe: 'cafe', marketplace: 'shop', mall: 'shop' }
+async function photon(q, near) {
+  const qs = new URLSearchParams({ q, limit: '8' })
+  if (near) { qs.set('lat', near.lat); qs.set('lon', near.lng) }
+  const ctrl = new AbortController()
+  const t = setTimeout(() => ctrl.abort(), 8000)
+  try {
+    const r = await fetch(`https://photon.komoot.io/api/?${qs}`, { signal: ctrl.signal })
+    const d = await r.json()
+    return d.features
+      .map((f) => {
+        const p = f.properties
+        const [lng, lat] = f.geometry.coordinates
+        const addr = [p.housenumber && p.street ? `${p.housenumber} ${p.street}` : p.street, p.district || p.locality, p.city, p.country].filter(Boolean).join(', ')
+        return { name: p.name || addr.split(',')[0], address: addr, lat, lng, type: PHOTON_TYPE[p.osm_value] || 'sight', dist: near ? haversine(near, { lat, lng }) : null }
+      })
+      .filter((r) => r.dist == null || r.dist < 150000)
+  } finally {
+    clearTimeout(t)
+  }
 }
 
 export async function searchCities(q, countryCode) {
@@ -270,3 +297,52 @@ export async function reverseGeocode(lat, lng) {
     return null
   }
 }
+
+/* ---------------- 附近美食 (OpenStreetMap via Nominatim) ---------------- */
+const CUISINE_ZH = {
+  vietnamese: '越南菜', chinese: '中餐', japanese: '日料', korean: '韩餐', thai: '泰餐', italian: '意餐', pizza: '披萨',
+  french: '法餐', indian: '印度菜', seafood: '海鲜', noodle: '粉面', vegetarian: '素食', vegan: '素食', coffee_shop: '咖啡',
+  burger: '汉堡', bbq: '烧烤', barbecue: '烧烤', sushi: '寿司', ramen: '拉面', regional: '地方菜', asian: '亚洲菜',
+  international: '国际菜', western: '西餐', hot_pot: '火锅', steak_house: '牛排', sandwich: '三明治', banh_mi: '法棍面包',
+  pho: '河粉', dessert: '甜品', ice_cream: '冰淇淋', cake: '蛋糕', tea: '茶饮', fish: '鱼',
+}
+export const cuisineLabel = (c) => (c || '').split(/[;,]/).map((x) => CUISINE_ZH[x.trim()] || '').filter(Boolean).slice(0, 2).join('·')
+
+const foodCache = new Map()
+export async function searchNearbyFood(pt, radius = 600) {
+  const key = `${pt.lat.toFixed(4)},${pt.lng.toFixed(4)}`
+  if (foodCache.has(key)) return foodCache.get(key)
+  const dLat = radius / 111000
+  const dLng = dLat / Math.cos((pt.lat * Math.PI) / 180)
+  const box = `${pt.lng - dLng},${pt.lat + dLat},${pt.lng + dLng},${pt.lat - dLat}`
+  const out = []
+  for (const amenity of ['restaurant', 'fast_food']) {
+    const wait = lastCall + 1100 - Date.now()
+    if (wait > 0) await sleep(wait)
+    lastCall = Date.now()
+    const qs = new URLSearchParams({ format: 'jsonv2', amenity, viewbox: box, bounded: '1', limit: '20', extratags: '1', namedetails: '1', 'accept-language': 'zh-CN,zh,en' })
+    const r = await fetch(`https://nominatim.openstreetmap.org/search?${qs}`)
+    if (!r.ok) continue
+    for (const d of await r.json()) {
+      if (!d.name && !d.namedetails?.name) continue
+      const lat = +d.lat, lng = +d.lon
+      out.push({
+        name: pickName(d), lat, lng, dist: haversine(pt, { lat, lng }),
+        cuisine: cuisineLabel(d.extratags?.cuisine), hours: d.extratags?.opening_hours || '',
+        // a few signals of a "known" place: has website / wikidata / cuisine tagged
+        score: (d.extratags?.website ? 1 : 0) + (d.extratags?.wikidata ? 2 : 0) + (d.extratags?.cuisine ? 1 : 0),
+        address: d.display_name,
+      })
+    }
+    if (out.length >= 10) break
+  }
+  const seen = new Set()
+  const list = out
+    .filter((r) => !seen.has(r.name) && seen.add(r.name))
+    .sort((a, b) => (a.dist - a.score * 120) - (b.dist - b.score * 120))
+    .slice(0, 8)
+  foodCache.set(key, list)
+  return list
+}
+
+export const gmNearbyFoodUrl = (pt) => `https://www.google.com/maps/search/restaurants/@${pt.lat},${pt.lng},17z`

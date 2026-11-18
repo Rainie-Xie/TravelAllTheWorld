@@ -1,11 +1,13 @@
 import { useNavigate } from 'react-router-dom'
-import { Plus, CalendarDays, Sparkles } from 'lucide-react'
+import { useState } from 'react'
+import { Plus, CalendarDays, Sparkles, MoreHorizontal, Pencil, Trash2, Copy, PartyPopper } from 'lucide-react'
 import { useStore } from '../store'
 import { flag } from '../data/countries'
 import { fmtDate, daysBetween } from '../lib/time'
 import { tripStatus, countdown } from '../lib/trip'
 import { makeSampleTrip } from '../data/sample'
-import { Empty } from '../components/ui'
+import { Empty, Sheet, useToast, confirmDialog } from '../components/ui'
+import { uid } from '../lib/util'
 
 const DOODLE = { beach: '🏝️', mountain: '🏔️', temple: '🛕', city: '🏙️' }
 
@@ -24,7 +26,7 @@ function StatusChip({ trip }) {
   return <span className="chip green">{cd != null ? (cd === 0 ? '今天出发' : `还有 ${cd} 天`) : '规划中'}</span>
 }
 
-export function TripCard({ trip, onClick }) {
+export function TripCard({ trip, onClick, onMore }) {
   const flags = [...new Set(trip.cities.map((c) => c.countryCode))]
   const days = trip.startDate && trip.endDate ? daysBetween(trip.startDate, trip.endDate) + 1 : null
   return (
@@ -33,6 +35,12 @@ export function TripCard({ trip, onClick }) {
         <div className="flags flag">{flags.map(flag).join(' ')}</div>
         <div className="tape" />
         <div className="doodle">{tripDoodle(trip)}</div>
+        {onMore && (
+          <button className="icon-btn sm" aria-label="更多操作" style={{ position: 'absolute', top: 10, right: 10, background: 'rgba(255,255,255,.85)', zIndex: 2 }}
+            onClick={(e) => { e.stopPropagation(); onMore() }}>
+            <MoreHorizontal size={17} />
+          </button>
+        )}
         <h3>{trip.name}</h3>
       </div>
       <div className="trip-body">
@@ -58,6 +66,10 @@ export default function Home() {
   const nav = useNavigate()
   const trips = useStore((s) => s.trips)
   const addTrip = useStore((s) => s.addTrip)
+  const deleteTrip = useStore((s) => s.deleteTrip)
+  const updateTrip = useStore((s) => s.updateTrip)
+  const toast = useToast()
+  const [menu, setMenu] = useState(null)
   const order = { ongoing: 0, planning: 1, past: 2, done: 3 }
   const sorted = [...trips].sort((a, b) => order[tripStatus(a)] - order[tripStatus(b)] || (a.startDate || '').localeCompare(b.startDate || ''))
   const hour = new Date().getHours()
@@ -92,12 +104,23 @@ export default function Home() {
         </div>
       ) : (
         <div className="stack" style={{ gap: 16 }}>
-          {sorted.map((t) => <TripCard key={t.id} trip={t} onClick={() => nav(`/trip/${t.id}`)} />)}
+          {sorted.map((t) => <TripCard key={t.id} trip={t} onClick={() => nav(`/trip/${t.id}`)} onMore={() => setMenu(t)} />)}
           {!trips.some((t) => t.sample) && (
             <button className="btn btn-ghost btn-sm" onClick={loadSample}><Sparkles size={14} />添加一个示例行程看看</button>
           )}
         </div>
       )}
+
+      <Sheet open={!!menu} onClose={() => setMenu(null)} title={menu?.name || ''}>
+        {menu && (
+          <div className="list">
+            <div className="list-item click" onClick={() => { setMenu(null); nav(`/trip/${menu.id}/edit`) }}><Pencil size={18} />编辑城市和日期</div>
+            <div className="list-item click" onClick={() => { updateTrip(menu.id, (d) => { d.done = !d.done }); toast(menu.done ? '已取消完成' : '🎉 已标记完成，足迹已点亮'); setMenu(null) }}><PartyPopper size={18} />{menu.done ? '取消「已完成」' : '标记为已完成（点亮足迹）'}</div>
+            <div className="list-item click" onClick={() => { const c = { ...structuredClone(menu), id: uid(), name: `${menu.name}（副本）`, done: false, sample: false, createdAt: Date.now() }; addTrip(c); toast('已复制'); setMenu(null) }}><Copy size={18} />复制一份</div>
+            <div className="list-item click" style={{ color: 'var(--red-500)' }} onClick={async () => { const t = menu; if (await confirmDialog({ title: `删除「${t.name}」？`, message: '删除后无法恢复。', okText: '删除', danger: true })) { deleteTrip(t.id); toast('已删除'); setMenu(null) } }}><Trash2 size={18} />删除这次旅行</div>
+          </div>
+        )}
+      </Sheet>
 
       {sorted.length > 0 && (
         <button className="btn btn-primary fab" onClick={() => nav('/trip/new')}><Plus size={20} />新建旅行</button>

@@ -112,6 +112,43 @@ export function Progress({ value }) {
   )
 }
 
-export function confirmAsk(msg) {
-  return window.confirm(msg)
+/*
+ * In-app confirm dialog. Native window.confirm() is blocked in many embedded
+ * browsers / webviews (it silently returns false), so never use it.
+ * Usage: if (await confirmDialog({ title, message, okText, danger: true })) …
+ */
+let showConfirm = null
+export function confirmDialog(opts) {
+  if (!showConfirm) return Promise.resolve(false)
+  return new Promise((resolve) => showConfirm({ ...opts, resolve }))
+}
+
+export function ConfirmHost() {
+  const [req, setReq] = useState(null)
+  useEffect(() => {
+    showConfirm = (r) => setReq(r)
+    return () => { showConfirm = null }
+  }, [])
+  useEffect(() => {
+    if (!req) return
+    const onKey = (e) => { if (e.key === 'Escape') done(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }) // eslint-disable-line react-hooks/exhaustive-deps
+  if (!req) return null
+  const done = (v) => { req.resolve(v); setReq(null) }
+  return createPortal(
+    <>
+      <div className="sheet-backdrop" style={{ zIndex: 3500 }} onClick={() => done(false)} />
+      <div className="confirm-box" role="alertdialog" aria-label={req.title}>
+        <div className="bold" style={{ fontSize: 17 }}>{req.title}</div>
+        {req.message && <div className="small muted mt-s" style={{ whiteSpace: 'pre-line' }}>{req.message}</div>}
+        <div className="row mt">
+          <button className="btn grow" onClick={() => done(false)}>{req.cancelText || '取消'}</button>
+          <button className={`btn grow ${req.danger ? 'btn-danger-solid' : 'btn-primary'}`} onClick={() => done(true)}>{req.okText || '确定'}</button>
+        </div>
+      </div>
+    </>,
+    document.body,
+  )
 }

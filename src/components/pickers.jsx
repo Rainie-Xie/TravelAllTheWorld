@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Search, Loader2, MapPin, Link2 } from 'lucide-react'
 import { Sheet } from './ui'
 import { ALL_COUNTRIES, POPULAR, countryName, flag } from '../data/countries'
@@ -51,7 +51,7 @@ export function CountryPicker({ open, onClose, onPick }) {
   )
 }
 
-export function CityPicker({ open, onClose, countryCode, onPick }) {
+export function CityPicker({ open, onClose, countryCode, onPick, multi = false, picked = [] }) {
   const [q, setQ] = useState('')
   const [results, setResults] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -63,9 +63,26 @@ export function CityPicker({ open, onClose, countryCode, onPick }) {
     try { setResults(await searchCities(q.trim(), countryCode)) } catch (e) { setErr(e.message) }
     setLoading(false)
   }
-  const pick = (c) => { onPick({ ...c, countryCode: c.countryCode || countryCode }); setQ(''); setResults(null); onClose() }
+  // multi: keep the sheet open so several cities can be added in a row
+  const isPicked = (c) => picked.includes(c.name)
+  const pick = (c) => {
+    if (isPicked(c)) return
+    onPick({ ...c, countryCode: c.countryCode || countryCode })
+    if (!multi) { setQ(''); setResults(null); onClose() }
+  }
   return (
-    <Sheet open={open} onClose={onClose} title={`添加城市 · ${flag(countryCode)} ${countryName(countryCode)}`}>
+    <Sheet open={open} onClose={onClose} title={`添加城市 · ${flag(countryCode)} ${countryName(countryCode)}`}
+      footer={multi ? <button className="btn btn-primary grow" onClick={onClose}>完成{picked.length ? `（已选 ${picked.length} 个）` : ''}</button> : null}>
+      {multi && <div className="tiny muted mb-s">可以连续点选多个城市，选好后点「完成」</div>}
+      {multi && popular.length > 0 && (
+        <div className="row wrap mb" style={{ gap: 8 }}>
+          {popular.map((c) => (
+            <button key={c.name} className={`chip btnlike ${isPicked(c) ? 'on' : ''}`} style={{ height: 34, fontSize: 14 }} onClick={() => pick(c)}>
+              {isPicked(c) ? '✓ ' : '+ '}{c.name}
+            </button>
+          ))}
+        </div>
+      )}
       <form className="row mb" onSubmit={(e) => { e.preventDefault(); run() }}>
         <div className="search-box grow">
           <Search size={18} />
@@ -79,16 +96,17 @@ export function CityPicker({ open, onClose, countryCode, onPick }) {
           {results.map((r, i) => (
             <div key={i} className="list-item click" onClick={() => pick(r)}>
               <MapPin size={18} color="var(--green-600)" />
-              <div className="grow">
+              <div className="grow" style={{ minWidth: 0 }}>
                 <div className="bold">{r.name}</div>
                 <div className="tiny faint ellipsis">{r.address}</div>
               </div>
+              {multi && <span className={`chip ${isPicked(r) ? 'green' : ''}`}>{isPicked(r) ? '✓ 已加' : '+ 添加'}</span>}
             </div>
           ))}
           {!results.length && <div className="list-item faint">没找到，换个写法试试（如英文名）</div>}
         </div>
       )}
-      {popular.length > 0 && (
+      {!multi && popular.length > 0 && (
         <>
           <div className="label mb-s">热门城市</div>
           <div className="row wrap" style={{ gap: 8 }}>
@@ -103,7 +121,7 @@ export function CityPicker({ open, onClose, countryCode, onPick }) {
 }
 
 /* ---------------- Place search: single search / paste link / batch paste ---------------- */
-export function PlaceAdder({ open, onClose, city, onAdd }) {
+export function PlaceAdder({ open, onClose, city, onAdd, defaultType = 'sight', onPinByName }) {
   const [tab, setTab] = useState('search')
   const [q, setQ] = useState('')
   const [results, setResults] = useState(null)
@@ -111,7 +129,10 @@ export function PlaceAdder({ open, onClose, city, onAdd }) {
   const [err, setErr] = useState('')
   const [batch, setBatch] = useState('')
   const [batchRes, setBatchRes] = useState(null)
-  const [type, setType] = useState('sight')
+  const [type, setType] = useState(defaultType)
+  useEffect(() => { if (open) setType(defaultType) }, [open, defaultType])
+  // the type the user picked wins; otherwise use what the search engine guessed
+  const typeFor = (r) => (type !== 'sight' || r.fromLink ? type : r.type || 'sight')
 
   const reset = () => { setQ(''); setResults(null); setErr(''); setBatch(''); setBatchRes(null) }
   const close = () => { reset(); onClose() }
@@ -151,7 +172,7 @@ export function PlaceAdder({ open, onClose, city, onAdd }) {
 
   const addBatch = () => {
     const picks = batchRes.filter((b) => b.status === 'ok' && b.pick >= 0).map((b) => ({ ...b.options[b.pick], name: b.query.length <= 20 ? b.query : b.options[b.pick].name }))
-    picks.forEach((p) => onAdd({ ...p, type: p.type === 'sight' ? type : p.type }))
+    picks.forEach((p) => onAdd({ ...p, type: typeFor(p) }))
     close()
   }
 
@@ -186,8 +207,8 @@ export function PlaceAdder({ open, onClose, city, onAdd }) {
           {results && (
             <div className="list">
               {results.map((r, i) => (
-                <div key={i} className="list-item click" onClick={() => { onAdd({ ...r, type: r.type === 'sight' || r.fromLink ? type : r.type }); close() }}>
-                  <div className="emoji-badge sm">{PLACE_TYPES[r.type === 'sight' ? type : r.type]?.emoji}</div>
+                <div key={i} className="list-item click" onClick={() => { onAdd({ ...r, type: typeFor(r) }); close() }}>
+                  <div className="emoji-badge sm">{PLACE_TYPES[typeFor(r)]?.emoji}</div>
                   <div className="grow" style={{ minWidth: 0 }}>
                     <div className="bold ellipsis">{r.name}</div>
                     <div className="tiny faint ellipsis">{r.address}</div>
@@ -195,8 +216,13 @@ export function PlaceAdder({ open, onClose, city, onAdd }) {
                   {r.dist != null && <span className={`chip ${r.dist > 60000 ? 'red' : ''}`}>{fmtDist(r.dist)}</span>}
                 </div>
               ))}
-              {!results.length && <div className="list-item faint small">没有结果。换个关键词，或在地图上直接点选位置。</div>}
+              {!results.length && <div className="list-item faint small">没找到「{q}」。{type === 'hotel' ? '可以试试粘贴订单里酒店的英文/当地语言地址，' : '换个写法（英文/当地名称）试试，'}或者用下面的方法直接添加。</div>}
             </div>
+          )}
+          {results && onPinByName && q.trim() && !parseMapLink(q) && (
+            <button className="btn btn-soft btn-block mt-s" onClick={() => { onPinByName({ name: q.trim(), type }); close() }}>
+              <MapPin size={16} />{results.length ? '都不对？' : ''}用「{q.trim().slice(0, 14)}」这个名字，到地图上点位置
+            </button>
           )}
         </>
       )}

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Plus, MapPinned, ExternalLink, Navigation, Loader2 } from 'lucide-react'
 import { useStore, useTrip } from '../store'
-import { TopBar, Empty, useToast } from '../components/ui'
+import { TopBar, Empty, useToast, confirmDialog } from '../components/ui'
 import MapView from '../components/MapView'
 import { PlaceAdder } from '../components/pickers'
 import PlaceEditor from '../components/PlaceEditor'
@@ -11,8 +11,8 @@ import { KINDS } from '../lib/recommend'
 import DayPlanner from './DayPlanner'
 import { flag } from '../data/countries'
 import { fmtShort, weekday, todayStr, fmtDur } from '../lib/time'
-import { PLACE_TYPES, getCity, cityDates, placesForDay, planDay, distributeDays, resolveRef, effectiveDay } from '../lib/trip'
-import { gmPlaceUrl, getRouteLine, reverseGeocode } from '../lib/geo'
+import { PLACE_TYPES, getCity, cityDates, placesForDay, planDay, distributeDays, resolveRef, effectiveDay, hotelForNight } from '../lib/trip'
+import { gmPlaceUrl, getRouteLine, reverseGeocode, haversine } from '../lib/geo'
 import { uid } from '../lib/util'
 
 const DEFAULT_STAY = { sight: 60, food: 60, cafe: 45, shop: 60, other: 45, transit: 15, hotel: 0 }
@@ -34,6 +34,8 @@ export default function CityPage() {
   const [adder, setAdder] = useState(false)
   const [editing, setEditing] = useState(null)
   const [pinMode, setPinMode] = useState(false)
+  const [pendingPin, setPendingPin] = useState(null) // { name, type } waiting for a map tap
+  const [adderType, setAdderType] = useState('sight')
   const [filter, setFilter] = useState('all')
   const [plan, setPlan] = useState(null)
   const [planning, setPlanning] = useState(false)
@@ -50,7 +52,7 @@ export default function CityPage() {
     if (!city || tab !== 'plan' || !date) return ''
     const eff = effectiveDay(trip, city, date, settings)
     const ps = placesForDay(city, date)
-    return JSON.stringify([date, eff, ps.map((p) => [p.id, p.lat, p.lng, p.stay, p.open, p.close, p.priority]), city.dayPlans?.[date]?.locked, trip.transports.map((t) => [t.dep, t.arr, t.fromCityId, t.toCityId, t.transferMin])])
+    return JSON.stringify([date, eff, ps.map((p) => [p.id, p.lat, p.lng, p.stay, p.open, p.close, p.priority]), city.dayPlans?.[date]?.locked, city.dayPlans?.[date]?.manual, trip.transports.map((t) => [t.dep, t.arr, t.fromCityId, t.toCityId, t.transferMin])])
   }, [trip, city, date, tab, settings])
 
   const reqId = useRef(0)
@@ -60,11 +62,12 @@ export default function CityPage() {
     setPlanning(true)
     setPlan((p) => (p && p.date === date ? p : null))
     setRouteLine(null)
-    planDay(trip, city, date, settings, { optimize: false }).then((r) => {
+    // auto mode: always show the best order (without dropping anything); manual mode: keep the user's order
+    planDay(trip, city, date, settings, { optimize: !city.dayPlans?.[date]?.manual, drop: false }).then((r) => {
       if (id !== reqId.current) return
       setPlan({ ...r, date })
       setPlanning(false)
-      const pts = [r.start, ...r.tl?.steps.map((s) => city.places.find((p) => p.id === s.id)) || [], r.end].filter(Boolean)
+      const pts = [r.start, ...r.tl?.steps.map((s) => city.places.find((p) => p.id === s.id) || r.pseudo?.[s.id]) || [], r.end].filter(Boolean)
       const legTaxi = [...(r.tl?.steps.map((s) => s.taxi) || []), r.tl?.endTaxi]
       if (pts.length >= 2) getRouteLine(pts, r.eff.mode, legTaxi).then((line) => id === reqId.current && setRouteLine(line))
       else setRouteLine(null)
@@ -81,8 +84,27 @@ export default function CityPage() {
       priority: 'must', stay: DEFAULT_STAY[type] ?? 60, day: tab === 'plan' && type !== 'hotel' ? date : null,
       ...(type === 'hotel' ? { hotelIn: city.arrive, hotelOut: city.leave } : {}),
     }
+    // don't add the same place twice
+    const dup = city.places.find((x) => x.type === type && (x.name === p.name || haversine(x, p) < 40))
+    if (dup) { toast(`「${dup.name}」已经在清单里了`); return }
     mutCity((c) => { c.places.push(p) })
-    toast(`已添加「${p.name}」${p.day ? '到当天' : ''}`)
+    if (type !== 'hotel') { toast(`已添加「${p.name}」${p.day ? '到当天' : ''}`); return }
+    afterHotelSaved(p)
+  }
+
+  // A new/edited hotel takes over its nights. Offer to remove older hotels it overlaps.
+  const afterHotelSaved = async (h) => {
+    const overlaps = city.places.filter((x) => x.type === 'hotel' && x.id !== h.id && x.hotelIn && h.hotelIn && x.hotelIn < h.hotelOut && h.hotelIn < x.hotelOut)
+    const nights = `${fmtShort(h.hotelIn)}–${fmtShort(h.hotelOut)}`
+    if (!overlaps.length) { toast(`🏨 已设为 ${nights} 的住处`); return }
+    const names = overlaps.map((x) => `「${x.name}」`).join('、')
+    const remove = await confirmDialog({
+      title: `${nights} 改住「${h.name}」`,
+      message: `这几晚原来住${names}。\n要把旧的酒店删掉吗？（不删也没关系，行程会按新酒店安排）`,
+      okText: '删掉旧的', cancelText: '保留',
+    })
+    if (remove) mutCity((c) => { c.places = c.places.filter((x) => !overlaps.some((o) => o.id === x.id)) })
+    toast(`🏨 ${nights} 住「${h.name}」，出发和回来都按它安排`)
   }
 
   const addRec = (r) => {
@@ -97,12 +119,24 @@ export default function CityPage() {
   }
 
   const savePlace = (p) => {
+    const saved = p.id ? p : { ...p, id: uid() }
+    const old = city.places.find((x) => x.id === saved.id)
     mutCity((c) => {
-      const i = c.places.findIndex((x) => x.id === p.id)
-      if (i >= 0) c.places[i] = p
-      else c.places.push({ ...p, id: uid() })
+      const i = c.places.findIndex((x) => x.id === saved.id)
+      if (i >= 0) c.places[i] = saved
+      else c.places.push(saved)
     })
     setEditing(null)
+    const hotelChanged = saved.type === 'hotel' && (!old || old.type !== 'hotel' || old.hotelIn !== saved.hotelIn || old.hotelOut !== saved.hotelOut)
+    if (hotelChanged) afterHotelSaved(saved)
+  }
+
+  // which nights each hotel is actually used for
+  const hotelUse = (h) => {
+    const nights = cityDates(city).filter((d) => d < city.leave && hotelForNight(city, d)?.id === h.id)
+    if (nights.length) return { ok: true, text: `住 ${nights.length} 晚 · ${fmtShort(nights[0])} 入住 → ${fmtShort(h.hotelOut || city.leave)} 退房` }
+    const other = h.hotelIn ? hotelForNight(city, h.hotelIn) : null
+    return { ok: false, text: other ? `没在用：这几晚住「${other.name}」` : '没在用：入住日期不在这个城市的日期里' }
   }
   const deletePlace = (p) => {
     mutCity((c) => { c.places = c.places.filter((x) => x.id !== p.id) })
@@ -112,10 +146,20 @@ export default function CityPage() {
   const onMapClick = async (ll) => {
     if (!pinMode) return
     setPinMode(false)
+    const named = pendingPin
+    setPendingPin(null)
+    const base = { lat: ll.lat, lng: ll.lng, priority: 'must', stay: 60, day: tab === 'plan' ? date : null, fromLink: true }
+    if (named) {
+      // name already known (search found nothing) → just confirm the spot
+      const type = named.type || 'sight'
+      setEditing({ ...base, name: named.name, type, stay: DEFAULT_STAY[type] ?? 60, day: type === 'hotel' ? null : base.day, ...(type === 'hotel' ? { hotelIn: city.arrive, hotelOut: city.leave } : {}) })
+      return
+    }
     setBusy('正在识别位置…')
     const info = await reverseGeocode(ll.lat, ll.lng)
     setBusy('')
-    setEditing({ name: info?.name || '', lat: ll.lat, lng: ll.lng, type: info?.type || 'sight', priority: 'must', stay: 60, day: tab === 'plan' ? date : null, address: info?.address || '', fromLink: true })
+    const type = info?.type || 'sight'
+    setEditing({ ...base, name: info?.name || '', type, address: info?.address || '', ...(type === 'hotel' ? { hotelIn: city.arrive, hotelOut: city.leave } : {}) })
   }
 
   const optimize = async () => {
@@ -123,7 +167,7 @@ export default function CityPage() {
     const r = await planDay(trip, city, date, settings, { optimize: true })
     mutCity((c) => {
       c.dayPlans = c.dayPlans || {}
-      c.dayPlans[date] = { ...(c.dayPlans[date] || {}), order: r.order }
+      c.dayPlans[date] = { ...(c.dayPlans[date] || {}), order: r.order, manual: false }
       for (const id of r.dropped) { const p = c.places.find((x) => x.id === id); if (p) p.day = null }
     })
     setBusy('')
@@ -132,7 +176,7 @@ export default function CityPage() {
 
   const distribute = async () => {
     const assigned = city.places.some((p) => p.day && p.type !== 'hotel' && !p.dayLocked)
-    if (assigned && !window.confirm('重新分配会打乱已经安排好的日期（勾选了「固定在这一天」的地点不动），继续吗？')) return
+    if (assigned && !(await confirmDialog({ title: '重新分配到每天？', message: '会打乱已经安排好的日期（勾选了「固定在这一天」的地点不动）', okText: '重新分配' }))) return
     const map = distributeDays(trip, city, settings)
     let draft
     updateTrip(tripId, (d) => {
@@ -146,7 +190,7 @@ export default function CityPage() {
     for (let i = 0; i < dates.length; i++) {
       setBusy(`正在规划第 ${i + 1}/${dates.length} 天…`)
       const r = await planDay(draft, c2, dates[i], settings, { optimize: true })
-      c2.dayPlans[dates[i]] = { ...(c2.dayPlans[dates[i]] || {}), order: r.order }
+      c2.dayPlans[dates[i]] = { ...(c2.dayPlans[dates[i]] || {}), order: r.order, manual: false }
       for (const id of r.dropped) { const p = c2.places.find((x) => x.id === id); if (p) p.day = null }
     }
     mutCity((c) => { c.places = c2.places; c.dayPlans = c2.dayPlans })
@@ -199,8 +243,8 @@ export default function CityPage() {
       <div className="page no-tab" style={{ paddingTop: 4 }}>
         <div style={{ position: 'relative' }}>
           <MapView markers={markers} lines={lines} center={city} height="42vh" onMapClick={onMapClick} style={{ minHeight: 240, cursor: pinMode ? 'crosshair' : undefined }} />
-          <button className={`btn btn-sm map-float ${pinMode ? 'btn-yellow' : ''}`} style={{ top: 10, right: 10, boxShadow: 'var(--shadow)' }} onClick={() => setPinMode((v) => !v)}>
-            <MapPinned size={15} />{pinMode ? '点地图任意位置…' : '地图选点'}
+          <button className={`btn btn-sm map-float ${pinMode ? 'btn-yellow' : ''}`} style={{ top: 10, right: 10, boxShadow: 'var(--shadow)' }} onClick={() => { setPinMode((v) => !v); setPendingPin(null) }}>
+            <MapPinned size={15} />{pinMode ? (pendingPin ? `点地图标出「${pendingPin.name.slice(0, 8)}」` : '点地图任意位置…') : '地图选点'}
           </button>
           {(busy || planning) && (
             <div className="chip map-float" style={{ left: 10, bottom: 10, background: '#fff', height: 30 }}>
@@ -221,7 +265,7 @@ export default function CityPage() {
             <Recommendations city={city} recs={recs} open={recOpen} onToggle={() => setRecOpen((v) => !v)} onAdd={addRec} />
             {city.places.length === 0 ? (
               <Empty emoji="📍" title="把想去的地方加进来" sub="点上面的热门景点直接添加，或者搜索、批量粘贴地名、粘贴 Google Maps 链接、在地图上点选。别忘了加上住的酒店！"
-                action={<button className="btn btn-primary" onClick={() => setAdder(true)}><Plus size={16} />添加地点</button>} />
+                action={<div className="row" style={{ justifyContent: 'center' }}><button className="btn btn-primary" onClick={() => setAdder(true)}><Plus size={16} />添加地点</button><button className="btn btn-yellow" onClick={() => { setAdderType('hotel'); setAdder(true) }}>🏨 添加住宿</button></div>} />
             ) : (
               <>
                 <div className="chip-scroll">
@@ -231,7 +275,7 @@ export default function CityPage() {
                   ))}
                 </div>
                 {!city.places.some((p) => p.type === 'hotel') && (
-                  <div className="card warn small row">🏨 <span className="grow">还没添加住宿。加上酒店后，路线规划会自动从酒店出发、回到酒店。</span></div>
+                  <div className="card warn small row">🏨 <span className="grow">还没添加住宿。加上酒店后，路线会自动从酒店出发、回到酒店。</span><button className="btn btn-sm btn-yellow" style={{ flex: 'none' }} onClick={() => { setAdderType('hotel'); setAdder(true) }}>添加住宿</button></div>
                 )}
                 {groups.filter(([k]) => filter === 'all' || filter === k).map(([k, list]) => (
                   <div key={k}>
@@ -244,7 +288,7 @@ export default function CityPage() {
                             <div className="bold ellipsis">{p.name}</div>
                             <div className="row wrap tiny muted" style={{ gap: 6, marginTop: 2 }}>
                               {k === 'hotel' ? (
-                                <span>{p.hotelIn ? `${fmtShort(p.hotelIn)} 入住 → ${fmtShort(p.hotelOut)} 退房` : '未设日期'}</span>
+                                <span style={{ color: hotelUse(p).ok ? 'var(--green-700)' : 'var(--red-500)' }}>{hotelUse(p).ok ? '✓ ' : '⚠️ '}{hotelUse(p).text}</span>
                               ) : (
                                 <>
                                   {p.priority === 'optional' ? <span>有空再去</span> : <span style={{ color: 'var(--green-700)' }}>⭐ 必去</span>}
@@ -290,7 +334,8 @@ export default function CityPage() {
         )}
       </div>
 
-      <PlaceAdder open={adder} onClose={() => setAdder(false)} city={city} onAdd={addPlace} />
+      <PlaceAdder open={adder} onClose={() => { setAdder(false); setAdderType('sight') }} city={city} onAdd={addPlace} defaultType={adderType}
+        onPinByName={(p) => { setPendingPin(p); setPinMode(true); window.scrollTo({ top: 0, behavior: 'smooth' }); toast('在地图上点一下它的位置') }} />
       <PlaceEditor open={!!editing} place={editing} city={city} onSave={savePlace} onDelete={deletePlace} onClose={() => setEditing(null)} />
     </>
   )
